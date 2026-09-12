@@ -1,0 +1,81 @@
+---
+description: Project identity, purpose, and high-level goals for `printf-toto`
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# printf-toto — Project Overview
+
+## What This Project Is
+
+`printf-toto` is a faithful CLI replica of the POSIX Core Utilities `printf` command (**POSIX core** subset).
+It formats operands under control of a format string and writes the result to stdout — once through the format, reusing the format while arguments remain.
+
+## Binary Name
+
+The compiled binary must always be named **`printf-toto`**. Never rename it.
+On Windows, MinGW may also emit `printf-toto.exe`; that is the same program.
+
+## Platforms
+
+| Platform | Build environment | Notes |
+|----------|-------------------|-------|
+| **Linux** | `gcc`/`clang` + GNU Make | Full POSIX path: `sigaction(SIGPIPE, SIG_IGN)` |
+| **Windows** | **MSYS2 UCRT64** (recommended) | Native Windows `.exe`; `install_sigpipe_ignore()` is a no-op under `_WIN32` |
+| **Git Bash** | Works if `/c/msys64/ucrt64/bin` is **before** Anaconda on `PATH` | Same binary as UCRT64; see `toolchain-structure.mdc` |
+
+Binaries are **not portable** across OSes — build separately on Linux and on Windows.
+
+## Scope — Keep It Minimal (POSIX core)
+
+Supporting behaviour:
+
+- Built-in `--help` / `--h` and `--version` / `--v` when they are the **sole** operand (`printf-toto --v or --version or printf-toto --h or --help`; help wins if both names somehow collide)
+- Format escapes and conversions: `%s` `%c` `%d` `%i` `%u` `%o` `%x` `%X` `%%`
+- Flags, width, precision; format reuse; POSIX defaults for missing args
+- Conversion errors: stderr diagnostic, continue, non-zero final status
+
+**Do not add**:
+
+- Floating conversions (`%f` / `%e` / `%E` / `%g` / `%G`)
+- `%b`, Bash `%q`, or other shell-builtin-only extensions
+- Interactive or TUI modes
+- stdin reading as input to formatting
+- Logging or debug output in normal operation
+- Single-dash `-h` / `-v` (only `--help`, `--h`, `--version`, and `--v` are special, and only as sole operand)
+- Any feature that would break POSIX-core `printf` behavioural compatibility for the supported subset
+
+## Behavioural Contract
+
+| Invocation | Output / result |
+|---|---|
+| `printf-toto` | missing operand → stderr + usage; exit `1` |
+| `printf-toto 'Hello\n'` | prints `Hello` + newline |
+| `printf-toto 'Hello, %s!\n' World` | prints `Hello, World!` + newline |
+| `printf-toto '%s\n' one two three` | prints three lines (`one`, `two`, `three`) — format reuse |
+| `printf-toto '%d\n' 42` | prints `42` + newline |
+| `printf-toto '100%%\n'` | prints `100%` + newline |
+| `printf-toto %s --help` | prints `--help` (meta-flag only when sole operand) |
+| `printf-toto --version` / `printf-toto --v` | prints `printf-toto <version>\n`, exits `0` |
+| `printf-toto --help` / `printf-toto --h` | prints usage on stdout, exits `0` |
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success; also `--help` / `--version` |
+| `1` | Missing format, conversion/format error (final status), write/setup failure |
+| `130` | Ctrl+C / `SIGINT` (`PRINTF_TOTO_EXIT_SIGINT`, `128 + 2`) |
+
+Broken pipe on `write` is a **write error** → exit `1` (not `0`).
+
+## Project Layout (summary)
+
+```
+include/   — printf_toto.h + printf_toto_{emit,format,write,cli}.h
+src/       — main.c + printf_toto_{emit,format,write,cli}.c
+tests/     — test_runner.c + test_*.c / .h (pure helpers)
+build/     — objects + binaries; dirs via .gitkeep, artefacts gitignored
+```
+
+See `implementation.mdc`, `toolchain-structure.mdc`, and `testing.mdc` for detail.

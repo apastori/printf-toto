@@ -1,0 +1,77 @@
+---
+description: Unit test layout and conventions for printf-toto (pure format helpers)
+globs: ["tests/**/*.c", "tests/**/*.h", "Makefile"]
+alwaysApply: false
+---
+
+# Testing — printf-toto
+
+## Scope
+
+The Makefile `test` target builds and runs **`build/tests/test_core`** (or `build/tests/test_core.exe` on Windows).
+
+Tests cover **pure helpers** only (escape expansion, single-conversion formatting into a buffer, argument-consumption / reuse accounting). There are **no** subprocess/integration tests in-tree; the full CLI format walk is not unit-tested end-to-end.
+
+## Layout
+
+| File | Role |
+|------|------|
+| `tests/test_runner.c` | `main()` — invokes all suites in fixed order |
+| `tests/test_*.c` / `.h` | One scenario per pair; headers declare the test function for `test_runner.c` |
+
+Suggested first scenarios (names may vary; keep one concern each):
+
+- Escape: `\n` / `\t` / `\\` expand correctly
+- Literal `%%` → single `%`
+- `%s` / `%d` (or `%x`) conversion into a stack buffer
+- Arg consumption count used for format reuse
+- Unsupported / out-of-scope conversion: document expected reject or skip behaviour if a helper exposes it
+
+One scenario per `.c` / `.h` pair; headers declare the test function for `test_runner.c`.
+
+## Framework
+
+- No external framework — plain C with `<assert.h>`.
+- Each case prints `PASS: <descriptive name>` on success.
+- `assert()` failure → `abort()` → non-zero exit from `make test`.
+
+## Build (from `Makefile`)
+
+Objects and the test binary live under `build/tests/`:
+
+```makefile
+TEST_CORE := build/tests/test_core
+# $(TEST_BUILD_DIR)/%.o ← tests/%.c
+# link $(TEST_CORE) from $(TEST_OBJS)
+test: $(TEST_CORE)
+	./$(TEST_CORE)
+```
+
+Helpers under test come from `#include` of the relevant `printf_toto_*.h` (and any `static inline` in headers) — **prefer not linking full `src/*.c`** when the API is header-testable; if a helper lives only in a `.c`, link that one object, not the whole CLI.
+
+## Required coverage themes
+
+1. Escape expansion produces the expected bytes and length.
+2. A basic string conversion (`%s`) matches the argument bytes.
+3. A basic integer conversion (`%d` or `%x`) matches expected text.
+4. `%%` yields a single percent character.
+5. Arg-consumption / reuse accounting returns the expected count for a simple format.
+
+## Adding tests
+
+- Add `tests/test_<name>.c` + `.h`, declare runner function in `.h`, call from `test_runner.c`, append to `TEST_SRCS` in `Makefile`.
+- Keep tests allocation-free where practical; stack buffers only.
+
+## Manual smoke tests (not automated)
+
+After `make`:
+
+```sh
+./build/printf-toto --version
+./build/printf-toto --help
+./build/printf-toto 'Hello\n'
+./build/printf-toto '%s\n' one two three
+./build/printf-toto '%d 0x%x\n' 255 255
+./build/printf-toto '%s\n' hello | head -n 1
+# Interactive long output + Ctrl+C — expect exit 130; terminal stays responsive
+```

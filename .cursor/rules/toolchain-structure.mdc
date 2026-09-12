@@ -1,0 +1,122 @@
+---
+description: C toolchain, build system, and directory structure for printf-toto
+globs: ["Makefile", "*.c", "*.h", "src/**/*.c", "include/**/*.h", "tests/**/*.c"]
+alwaysApply: false
+---
+
+# Toolchain & Project Structure
+
+## Language
+
+**C11** (`-std=c11`). **No C++.**
+
+## Compiler flags (from `Makefile`)
+
+```
+-std=c11 -Wall -Wextra -Wpedantic -Werror
+-D_POSIX_C_SOURCE=200809L
+-Iinclude
+-O2          # release
+```
+
+Debug target adds `-g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer`.
+
+## Compiler selection
+
+`Makefile` picks **gcc** if available, else **clang**:
+
+```makefile
+CC := $(shell command -v gcc >/dev/null 2>&1 && echo gcc || echo clang)
+```
+
+## Build system
+
+**GNU Make** at repo root. Separate compile (`.o`) and link steps. All artefacts under **`build/`**.
+
+| Target | Output |
+|--------|--------|
+| `make` / `all` | `build/printf-toto` |
+| `make debug` | `build/printf-toto-debug` |
+| `make test` | builds + runs `build/tests/test_core` |
+| `make clean` | removes objects/binaries under `build/`; keeps `.gitkeep` |
+| `make install` | `install -m 755 build/printf-toto /usr/local/bin` (Linux/macOS; needs sudo) |
+
+**Main sources:** `src/main.c`, `src/printf_toto_emit.c`, `src/printf_toto_format.c`, `src/printf_toto_write.c`, `src/printf_toto_cli.c` → objects `build/*.o`
+
+**Test sources:** `tests/test_runner.c` plus `tests/test_*.c` → objects `build/tests/*.o`
+
+## Dependencies
+
+**libc only** — no extra `-l` flags. POSIX headers: `unistd.h`, `signal.h`, etc.
+
+## Directory layout
+
+```
+printf-toto/
++-- LICENSE.txt          — GNU GPL v2 (full text)
++-- c_version.txt        — C11 / compiler / toolchain documentation
++-- .cursor/rules/
++-- Makefile
++-- README.md
++-- include/
+¦   +-- printf_toto.h
+¦   +-- printf_toto_emit.h
+¦   +-- printf_toto_format.h
+¦   +-- printf_toto_write.h
+¦   +-- printf_toto_cli.h
++-- src/
+¦   +-- main.c
+¦   +-- printf_toto_emit.c
+¦   +-- printf_toto_format.c
+¦   +-- printf_toto_write.c
+¦   +-- printf_toto_cli.c
++-- tests/
+¦   +-- test_runner.c
+¦   +-- test_*.c / .h    — pure helper scenarios
++-- build/               — scaffolding tracked; artefacts gitignored
+    +-- .gitkeep
+    +-- *.o              — generated
+    +-- printf-toto      — generated
+    +-- printf-toto-debug — generated
+    +-- tests/
+        +-- .gitkeep
+        +-- *.o          — generated
+        +-- test_core    — generated
+```
+
+Build artefacts under `build/` (including `printf-toto.exe` / `test_core.exe` on Windows) are gitignored. Directories stay in the repo via `build/.gitkeep` and `build/tests/.gitkeep`.
+
+## Building on Linux
+
+```sh
+make clean && make && make test
+./build/printf-toto --version
+```
+
+## Building on Windows (MSYS2 UCRT64)
+
+**Recommended:** open **MSYS2 UCRT64** from the Start menu:
+
+```sh
+pacman -S make mingw-w64-ucrt-x86_64-gcc   # once
+cd /path/to/printf-toto
+make clean && make && make test
+./build/printf-toto --version
+```
+
+Produces a **native Windows executable** (`build/printf-toto` or `build/printf-toto.exe`). Runs in UCRT64, Git Bash, and CMD.
+
+### Git Bash caveat
+
+Git Bash can build if **`/c/msys64/ucrt64/bin` is early on `PATH`**. Otherwise `gcc --version` may work while `cc1` fails silently (DLL load order). Prefer UCRT64 shell or:
+
+```bash
+PATH="/c/msys64/ucrt64/bin:$PATH" make
+```
+
+## Linking notes
+
+- Pure helpers declared in headers (or isolated `.c` units) are what tests exercise.
+- Prefer tests that do **not** link the full CLI; avoid pulling `main` into `test_core`.
+- `main()` lives only in `src/main.c`.
+- Debug binary is linked in one step from sources with `CFLAGS_DEBUG` (does not reuse release `.o` files).

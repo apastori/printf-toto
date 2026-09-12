@@ -1,0 +1,78 @@
+---
+description: C code style, formatting, naming, and quality rules for printf-toto
+globs: ["src/**/*.c", "include/**/*.h", "tests/**/*.c", "tests/**/*.h", "Makefile"]
+alwaysApply: false
+---
+
+# Code Style & Quality
+
+## Standard & flags
+
+- **C11** (`-std=c11`)
+- `-Wall -Wextra -Wpedantic -Werror`
+- `-D_POSIX_C_SOURCE=200809L`
+- Zero warnings — all treated as errors
+
+## Formatting
+
+- **Indentation:** 4 spaces. No tabs.
+- **Function definitions:** opening brace on its own line.
+- **Line length:** prefer =80 characters where practical.
+- **Files end with a single newline.**
+
+## Module conventions
+
+- **`src/main.c`** stays thin — wiring only; no format walk, no business logic beyond dispatch.
+- **`include/printf_toto.h`** — version, exit codes, `printf_toto_run()` declaration; keep public API here.
+- **One concern per `src/printf_toto_*.c`** — do not collapse back into a monolith without reason.
+- **Platform code:** use `#if defined(_WIN32)` / `#else` for OS-specific behaviour (see `install_sigpipe_ignore()` in `printf_toto_cli.c`).
+
+## Naming
+
+| Kind | Style | Examples |
+|------|-------|----------|
+| Functions | `snake_case` | `printf_toto_run`, `printf_toto_emit_error`, `expand_escape` |
+| Macros / constants | `UPPER_SNAKE_CASE` | `PRINTF_TOTO_VERSION_STRING`, `PRINTF_TOTO_EXIT_OK` |
+| Headers | `PRINTF_TOTO_*_H` guards | `PRINTF_TOTO_H`, `PRINTF_TOTO_CLI_H` |
+
+Public API prefix: **`printf_toto_`** for module entry points; pure helpers used by tests may use shorter names when declared in headers (document the contract).
+
+## Memory
+
+- Prefer **stack buffers** for formatting a single conversion or escape expansion.
+- Heap only when a result cannot fit a documented stack cap — allocate **before** writing the final chunk, not mid-`write()` retry.
+- No `realloc` in-tree unless explicitly justified later.
+- libc `strto*` / `snprintf` may be used to **build** conversion text into a buffer; user-facing output still goes out via `write()` helpers.
+
+## Output path rules (`printf_toto_write.c`)
+
+- `write(STDOUT_FILENO, …)` with partial-write and `EINTR` retry.
+- Do not stream the final payload with `puts` / `fputs` / `fwrite` as the primary path — project standard is raw `write()`.
+- On `EPIPE` or unrecoverable write error: emit diagnostic if appropriate, then `exit(PRINTF_TOTO_EXIT_ERR)` (status **1** — not 0).
+
+## Errors
+
+- **stderr only.**
+- errno paths: `printf-toto: <context>: <strerror(errno)>` (see `printf_toto_emit.c`).
+- Conversion / format diagnostics: `printf-toto: <message>` (POSIX does not require `strerror` for these).
+
+## Comments
+
+- Chain-of-thought block at top of each `src/*.c` and test file (see existing files).
+- Contract comments on non-trivial functions: preconditions, postconditions, return value, error behaviour.
+- Comment non-obvious decisions (buffer sizes, platform guards, POSIX defaults); not obvious code.
+
+## Tests
+
+- Plain `assert()` — no external test framework.
+- One scenario per `tests/test_*.c`; runner in `tests/test_runner.c`.
+- Print `PASS: <name>` on success.
+
+## What not to do
+
+- Do not compile as C++.
+- Do not link libraries beyond libc.
+- Do not use `gets`, unbounded `scanf`, or ignore `write()` byte counts.
+- Do not add `-h` / `-v` unless explicitly requested (breaks current contract).
+- Do not add floating-point conversions (`%f` / `%e` / `%g` / …), `%b`, or Bash `%q` unless the project scope is explicitly expanded.
+- Do not treat meta-flags as special when they appear as format or data arguments (`printf-toto %s --help` must print `--help`).

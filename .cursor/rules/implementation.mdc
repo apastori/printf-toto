@@ -1,0 +1,113 @@
+---
+description: Canonical C11 implementation for printf-toto — module layout, format walk, write path, SIGPIPE, and exit behaviour
+globs: ["src/**/*.c", "include/**/*.h"]
+alwaysApply: false
+---
+
+# printf-toto — Implementation (C11)
+
+## Module layout
+
+| Path | Role |
+|------|------|
+| `include/printf_toto.h` | `PRINTF_TOTO_VERSION_STRING`, `PRINTF_TOTO_EXIT_*` enum, `printf_toto_run()` declaration |
+| `include/printf_toto_emit.h` | `printf_toto_emit_error()`, conversion/format diagnostic helpers |
+| `include/printf_toto_format.h` | Format walk, escape expansion, conversion formatting, arg consumption |
+| `include/printf_toto_write.h` | `try_write_all()` (or equivalent), `maybe_normalize_broken_pipe_errno()` |
+| `include/printf_toto_cli.h` | `scan_meta_flags()`, `print_help()`, `print_version()`, `install_sigpipe_ignore()`, `install_sigint_handler()`, `printf_toto_exit_if_stop_requested()` |
+| `src/main.c` | `main()` only — dispatch help/version, setup, call `printf_toto_run()` |
+| `src/printf_toto_emit.c` | stderr diagnostics |
+| `src/printf_toto_format.c` | POSIX-core format processing and format reuse |
+| `src/printf_toto_write.c` | Partial-write / `EINTR` retry; broken-pipe normalize |
+| `src/printf_toto_cli.c` | Meta-flag scan, help/version text, SIGPIPE/SIGINT setup |
+
+Each `.c` file opens with a **chain-of-thought comment block** (responsibility, syscalls, heap policy, C standard). Preserve that pattern when adding files.
+
+## C standard
+
+**ISO C11** (`-std=c11`), `-D_POSIX_C_SOURCE=200809L` for Linux POSIX.1-2008 (`sigaction`, `write`, etc.).
+MinGW builds define `_WIN32`; signal setup is guarded there (see below).
+
+## Scope — POSIX core only
+
+Supported:
+
+- Format escapes: `\n` `\t` `\\` `\a` `\b` `\r` `\v` `\f` and octal `\0…` where POSIX requires
+- Conversions: `%s` `%c` `%d` `%i` `%u` `%o` `%x` `%X` `%%`
+- Flags, field width, precision (including `*` where POSIX allows)
+- Format reuse while leftover arguments remain; missing args use POSIX defaults
+
+**Not supported** (do not implement unless scope is explicitly expanded):
+
+- Floating conversions `%f` `%e` `%E` `%g` `%G` (and related)
+- `%b`, Bash `%q`, or other shell-builtin extensions
+
+## Format pipeline (`printf_toto_run`)
+
+1. Require a `FORMAT` operand; if missing → diagnostic + usage hint, exit `1`.
+2. Walk `FORMAT` left to right: literal bytes, backslash escapes, conversion specifications.
+3. Consume arguments in order; when the format is exhausted and arguments remain, **reuse** the format (POSIX).
+4. On conversion/parse errors: write a stderr diagnostic, emit the value accumulated so far per POSIX/`strto*` behaviour, set non-zero status, **continue**.
+5. Write produced bytes through `printf_toto_write` helpers (`write(STDOUT_FILENO, …)`).
+
+## Output path (`src/printf_toto_write.c`)
+
+**Allowed:**
+
+- Stack (or justified heap) buffers holding already-formatted bytes
+- `write(STDOUT_FILENO, …)` until the current chunk is fully sent (partial writes retried)
+- `printf_toto_exit_if_stop_requested()` between writes when appropriate
+- libc `snprintf` / `strtol` / `strtoul` / etc. when **building** conversion text into a buffer
+
+**Forbidden as the primary user-output path:**
+
+- `puts` / `fputs` / `fwrite` for the formatted payload
+
+On `EINTR` from stop/`SIGINT`: `_exit(PRINTF_TOTO_EXIT_SIGINT)` (130).
+On `EPIPE`: normalize errno if needed, `printf_toto_emit_error("write")` (or equivalent), `exit(PRINTF_TOTO_EXIT_ERR)` (**1**).
+On other write errors: emit error, `exit(1)`.
+
+## SIGPIPE / EPIPE (cross-platform)
+
+| Platform | `install_sigpipe_ignore()` | Broken pipe |
+|----------|----------------------------|-------------|
+| **Linux / POSIX** | `sigaction(SIGPIPE, SIG_IGN, NULL)` | `write()` → `errno == EPIPE` |
+| **Windows / MinGW (`_WIN32`)** | **No-op** (returns 0) — no `SIGPIPE` | `write()` failure; CRT may set `EPIPE` or `EINVAL`; `maybe_normalize_broken_pipe_errno()` remaps `EINVAL` on pipe fds to `EPIPE` |
+
+Ignoring `SIGPIPE` is the POSIX idiom so `write()` fails with `EPIPE` instead of terminating the process with signal `141`. For **printf-toto**, a broken pipe is a **write error** (exit `1`), not success.
+
+## SIGINT / Ctrl+C
+
+| Platform | Setup | Exit |
+|----------|-------|------|
+| **Linux / POSIX** | `sigaction(SIGINT, …)` sets `printf_toto_stop_requested` | Main thread: `_exit(130)` via `printf_toto_exit_if_stop_requested()` or on `EINTR` |
+| **Windows / MinGW** | `signal(SIGINT, …)` only — **no** `SetConsoleCtrlHandler` | Same — `_exit(130)` from main thread |
+
+Handlers **must not** call `_exit` directly (async exit can freeze MSYS/Git Bash PTYs). Flag + main-thread exit only.
+
+## Exit codes
+
+| Code | Constant | Meaning |
+|------|----------|---------|
+| `0` | `PRINTF_TOTO_EXIT_OK` | Success; also `--help` / `--version` |
+| `1` | `PRINTF_TOTO_EXIT_ERR` | Missing format, conversion/format error (final status), write/setup/OOM failure |
+| `130` | `PRINTF_TOTO_EXIT_SIGINT` | Ctrl+C / `SIGINT` (`128 + 2`) |
+
+## Error messages
+
+- errno-backed: `printf-toto: <context>: <strerror(errno)>`
+- conversion/format: `printf-toto: <message>` (e.g. incomplete numeric conversion)
+
+Never print errors to stdout.
+
+## Argument parsing (`src/printf_toto_cli.c`, `src/main.c`)
+
+1. If `argc == 2` and argv[1] is exact `--help` or `--h` → help + exit 0 (**wins** over version).
+2. Else if `argc == 2` and argv[1] is exact `--version` or `--v` → `printf-toto <version>\n` + exit 0.
+3. Else if no `FORMAT` operand → error + usage, exit 1.
+4. Else run format pipeline with `argv[1]` as format and `argv[2…]` as arguments.
+5. Strings like `--foo` or `-` as format or data are **operands**, not meta-flags (so `printf-toto %s --help` prints `--help`).
+
+## Naming
+
+Public run entry point: **`printf_toto_run()`** (not bare `run`).
