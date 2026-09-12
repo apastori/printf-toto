@@ -1,0 +1,27 @@
+ISO C11 / toolchain notes for printf-toto
+=========================================
+
+Language standard
+  -std=c11
+
+Feature-test macro
+  -D_POSIX_C_SOURCE=200809L
+  Enables POSIX.1-2008 interfaces used by the CLI (sigaction, write, etc.)
+  on Linux. MinGW/UCRT64 builds also define _WIN32; signal setup is guarded.
+
+Warning policy
+  -Wall -Wextra -Wpedantic -Werror
+  (All warnings treated as errors; rationale lives in the Makefile / rules.)
+
+Optimisation
+  Release: -O2
+  Debug:   -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer
+
+Compiler selection
+  Makefile picks gcc if present, otherwise clang.
+
+Libraries
+  libc only — no extra -l flags.
+
+Build system
+  GNU Make at repository root; artefacts under build/.
